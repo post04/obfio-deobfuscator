@@ -8,7 +8,6 @@ import (
 
 func Deobfuscate(a *ast.Program) {
 	simplifier.Simplify(a, true)
-
 	visits := []func(p *ast.Program){
 		visitors.ReplaceReassignments,
 		visitors.ReplaceStrings,
@@ -17,4 +16,5 @@ func Deobfuscate(a *ast.Program) {
 	for _, fn := range visits {
 		fn(a)
 	}
+
 }
