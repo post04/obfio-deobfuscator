@@ -1,20 +1,30 @@
 package visitors
 
 import (
+	"fmt"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/t14raptor/go-fast/ast"
 	"github.com/t14raptor/go-fast/generator"
-	"github.com/xkiian/obfio-deobfuscator/visitors/utils"
+	"github.com/xkiian/obfio-deobfuscator/utils"
 )
 
 type stringReplacerGather struct {
 	ast.NoopVisitor
 	stopValue   float64
 	ShuffleExpr *ast.Expression
-	DecoderFunc *ast.FunctionLiteral
+	DecoderFunc ast.Id
 	offset      int
 	stringArray []string
+}
+
+type stringReplacer struct {
+	ast.NoopVisitor
+	DecoderFunc ast.Id
+	decoder     *utils.Rc4StringDecoder
 }
 
 func (v *stringReplacerGather) VisitExpressionStatement(n *ast.ExpressionStatement) {
@@ -80,10 +90,9 @@ func (v *stringReplacerGather) VisitExpressionStatement(n *ast.ExpressionStateme
 func (v *stringReplacerGather) VisitFunctionLiteral(n *ast.FunctionLiteral) {
 	n.VisitChildrenWith(v)
 	code := generator.Generate(n)
-	if !strings.Contains(code, "return decodeURIComponent") && v.DecoderFunc == nil {
+	if !strings.Contains(code, "return decodeURIComponent(") {
 		return
 	}
-	v.DecoderFunc = n
 
 	if len(n.Body.List) != 2 {
 		return
@@ -164,10 +173,54 @@ func (v *stringReplacerGather) VisitVariableDeclaration(n *ast.VariableDeclarati
 	v.stringArray = values
 }
 
-type stringReplacer struct {
-	ast.NoopVisitor
-	gather  *stringReplacerGather
-	decoder *utils.Rc4StringDecoder
+func (v *stringReplacerGather) VisitFunctionDeclaration(n *ast.FunctionDeclaration) {
+	n.VisitChildrenWith(v)
+	code := generator.Generate(n)
+	if !strings.Contains(code, "return decodeURIComponent(") {
+		return
+	}
+	v.DecoderFunc = n.Function.Name.ToId()
+}
+
+func (v *stringReplacer) VisitExpression(n *ast.Expression) {
+	n.VisitChildrenWith(v)
+
+	callExpr, ok := n.Expr.(*ast.CallExpression)
+	if !ok {
+		return
+	}
+
+	callee, ok := callExpr.Callee.Expr.(*ast.Identifier)
+	if !ok {
+		return
+	}
+	if callee.ToId() != v.DecoderFunc {
+		return
+	}
+
+	indexLit, ok := callExpr.ArgumentList[0].Expr.(*ast.NumberLiteral)
+	if !ok {
+		return
+	}
+	index := int(indexLit.Value)
+
+	keyLit, ok := callExpr.ArgumentList[1].Expr.(*ast.StringLiteral)
+	if !ok {
+		return
+	}
+	key := keyLit.Value
+
+	decoded := v.decoder.Get(index, key)
+
+	n.Expr = &ast.StringLiteral{Value: decoded}
+}
+
+var normalRe = regexp.MustCompile(`^[0-9][a-zA-Z0-9+\-*/%()=<>!&|^.,\s]*$`)
+var shuffleCheckerRe = regexp.MustCompile(`parseInt\s*\(\s*.\s*\(\s*(0x[0-9a-fA-F]+)\s*,\s*(['"])(.*?)\s*'\)\s*\)`)
+
+type Entry struct {
+	index int
+	key   string
 }
 
 func ReplaceStrings(p *ast.Program) {
@@ -176,14 +229,38 @@ func ReplaceStrings(p *ast.Program) {
 	p.VisitWith(f)
 
 	decoder := utils.NewRc4StringDecoder(f.stringArray, f.offset)
+	fmt.Println(generator.Generate(f.ShuffleExpr))
+	matches := shuffleCheckerRe.FindAllStringSubmatch(generator.Generate(f.ShuffleExpr), -1)
+	var out []Entry
+	for _, m := range matches {
+		hexStr := m[1]
+		key := m[3]
+		val, err := strconv.ParseInt(hexStr, 0, 64)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "parse error:", err)
+			continue
+		}
+		out = append(out, Entry{
+			index: int(val),
+			key:   key,
+		})
+	}
+outer:
+	for {
+		for _, entry := range out {
+			text := decoder.Get(entry.index, entry.key)
+			if !normalRe.MatchString(text) {
+				decoder.Shift()
+				continue outer
+			}
+		}
+		break
+	}
 
-	utils.RotateStringArray(f.stringArray, f.ShuffleExpr, decoder, int(f.stopValue))
-
-	/*f2 := &stringReplacer{
-		gather:  f,
-		decoder: decoder,
+	f2 := &stringReplacer{
+		DecoderFunc: f.DecoderFunc,
+		decoder:     decoder,
 	}
 	f2.V = f2
-	p.VisitWith(f2)*/
-
+	p.VisitWith(f2)
 }

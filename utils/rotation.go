@@ -1,10 +1,15 @@
 package utils
 
+/*
+inspired: https://github.com/ben-sb/obfuscator-io-deobfuscator/blob/443e8855bc75749aa49e59de6f14d571f6f07508/src/deobfuscator/helpers/strings/rotation/rotation.ts
+
+will fix if i actually have to (i've made a "simpler" but cheaty version)
+*/
 import (
 	"fmt"
 	"strconv"
+	"time"
 
-	"github.com/goforj/godump"
 	"github.com/t14raptor/go-fast/ast"
 )
 
@@ -18,7 +23,7 @@ func (NumberOperation) isOperation() {}
 func (CallOperation) isOperation()   {}
 
 type NumberOperation struct {
-	value string
+	value int64
 }
 type BinaryOperation struct {
 	operator string
@@ -44,7 +49,7 @@ func parseOperation(expr *ast.Expression) Operation {
 	case *ast.BinaryExpression:
 		return parseBinaryOperation(expr.Expr.(*ast.BinaryExpression))
 	case *ast.NumberLiteral:
-		return &NumberOperation{value: strconv.FormatFloat(expr.Expr.(*ast.NumberLiteral).Value, 'f', 2, 64)}
+		return &NumberOperation{value: int64(expr.Expr.(*ast.NumberLiteral).Value)}
 	}
 	return nil
 }
@@ -91,7 +96,7 @@ func applyOperation(op Operation, decoder *Rc4StringDecoder) (any, bool) {
 	//godump.Dump(op)
 	switch op.(type) {
 	case *CallOperation:
-		fmt.Println("CallOperation")
+		//fmt.Println("CallOperation")
 		cOp := op.(*CallOperation)
 		if len(cOp.args) != 2 {
 			panic("invalid call operation length")
@@ -109,19 +114,18 @@ func applyOperation(op Operation, decoder *Rc4StringDecoder) (any, bool) {
 		case float64:
 			val = int(cOp.args[0].(float64))
 		}
-		fmt.Println(cOp.args[1].(string))
+		//fmt.Println(cOp.args[1].(string))
 		res, errd := decoder.GetForRotate(val, cOp.args[1].(string))
 		if errd {
 			return nil, true
 		}
-		fmt.Println(res)
-		resInt, errr := strconv.ParseInt(res, 10, 32)
+		resInt, errr := strconv.ParseInt(res, 10, 64)
 		if errr != nil {
 			return nil, true
 		}
 		return resInt, false
 	case *UnaryOperation:
-		fmt.Println("UnaryOperation")
+		//fmt.Println("UnaryOperation")
 		arg, err := applyOperation(op.(*UnaryOperation).argument, decoder)
 		if err {
 			return nil, true
@@ -130,35 +134,43 @@ func applyOperation(op Operation, decoder *Rc4StringDecoder) (any, bool) {
 		case "+":
 			return arg, false
 		case "-":
-			val, err := strconv.ParseInt(arg.(string), 10, 32)
-			if err != nil {
-				panic(err)
+			switch v := arg.(type) {
+			case int64:
+				return -v, false
+			case int:
+				return -int64(v), false
+			default:
+				return nil, true
 			}
-			return -val, false
 		}
 	case *BinaryOperation:
-		//fmt.Println("BinaryOperation")
-		//godump.Dump(op.(*BinaryOperation).left, op.(*BinaryOperation).right)
-
-		leftString, errd := applyOperation(op.(*BinaryOperation).left, decoder)
+		leftVal, errd := applyOperation(op.(*BinaryOperation).left, decoder)
 		if errd {
 			return nil, true
 		}
-		rightString, errd := applyOperation(op.(*BinaryOperation).right, decoder)
+		rightVal, errd := applyOperation(op.(*BinaryOperation).right, decoder)
 		if errd {
 			return nil, true
 		}
-		//fmt.Println(leftString.(string), rightString.(string))
 
-		left, err := strconv.ParseInt(leftString.(string), 10, 32)
-		if err != nil {
+		var left, right int64
+		switch v := leftVal.(type) {
+		case int64:
+			left = v
+		case int:
+			left = int64(v)
+		default:
 			return nil, true
 		}
-		right, err := strconv.ParseInt(rightString.(string), 10, 32)
-		if err != nil {
+		switch v := rightVal.(type) {
+		case int64:
+			right = v
+		case int:
+			right = int64(v)
+		default:
 			return nil, true
 		}
-		//fmt.Println(op.(*BinaryOperation).operator)
+
 		switch op.(*BinaryOperation).operator {
 		case "+":
 			return left + right, false
@@ -175,7 +187,6 @@ func applyOperation(op Operation, decoder *Rc4StringDecoder) (any, bool) {
 		//fmt.Println("NumberOperation")
 		return op.(*NumberOperation).value, false
 	}
-	godump.Dump(op)
 	panic("invalid operation2")
 	return nil, true
 }
@@ -189,29 +200,18 @@ func RotateStringArray(
 	operation := parseOperation(expression)
 	i := 0
 	for {
-		value, errd := applyOperation(operation, decoder)
-		/*if i > 5 {
-			return
-		}*/
-		/*if array[0] == "WO3cTf4" {
-			d, _ := json.Marshal(array)
-			fmt.Println(string(d))
-			return
-		}*/
+		v, errd := applyOperation(operation, decoder)
+		fmt.Println(v, errd)
+		time.Sleep(100 * time.Millisecond)
 		if errd {
-			first := array[0]
-			copy(array, array[1:])
-			array[len(array)-1] = first
-			decoder.stringArray = array
+			array = append(array[1:], array[0])
+			decoder.StringArray = array
 		} else {
-			if value == stopValue {
+			if vi, ok := v.(int64); ok && vi == int64(stopValue) {
 				break
-			} else {
-				first := array[0]
-				copy(array, array[1:])
-				array[len(array)-1] = first
-				decoder.stringArray = array
 			}
+			array = append(array[1:], array[0])
+			decoder.StringArray = array
 		}
 
 		i++

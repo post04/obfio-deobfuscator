@@ -16,5 +16,4 @@ func Deobfuscate(a *ast.Program) {
 	for _, fn := range visits {
 		fn(a)
 	}
-
 }
