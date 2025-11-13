@@ -5,9 +5,11 @@ import (
 	"github.com/t14raptor/go-fast/token"
 )
 
+type functionCalls int
+
 const (
-	callWithParams    = 69
-	callWithoutParams = 420
+	callWithParams functionCalls = iota
+	callWithoutParams
 )
 
 type mathType struct {
@@ -173,11 +175,11 @@ func (v *proxySimplifier) VisitExpression(n *ast.Expression) {
 				Left:     &arguments[0],
 				Right:    &arguments[1],
 			}
-		case int:
+		case functionCalls:
 			if callExpr == nil {
 				return
 			}
-			switch val.(int) {
+			switch val {
 			case callWithParams:
 				n.Expr = &ast.CallExpression{
 					Callee:       &arguments[0],
