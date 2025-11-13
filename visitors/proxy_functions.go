@@ -2,7 +2,17 @@ package visitors
 
 import (
 	"github.com/t14raptor/go-fast/ast"
+	"github.com/t14raptor/go-fast/token"
 )
+
+const (
+	callWithParams    = 69
+	callWithoutParams = 420
+)
+
+type mathType struct {
+	operator token.Token
+}
 
 type proxySimplify struct {
 	ast.NoopVisitor
@@ -76,17 +86,57 @@ func (v *proxySimplify) VisitVariableDeclarator(n *ast.VariableDeclarator) {
 			v.proxy[id][strLit.Value] = key.Value.Expr.(*ast.StringLiteral).Value
 
 		case *ast.FunctionLiteral:
-			v.proxy[id][strLit.Value] = key.Value.Expr
+			// identify what type of function it is
+			functionExpr := key.Value.Expr.(*ast.FunctionLiteral)
+			if len(functionExpr.Body.List) != 1 {
+				continue
+			}
+			// make sure body[0] is a return statement
+			returnStmt, ok := functionExpr.Body.List[0].Stmt.(*ast.ReturnStatement)
+			if !ok {
+				continue
+			}
+			// make sure return statement has an argument
+			if returnStmt.Argument == nil {
+				continue
+			}
+			// now identify the type of return stmt it is (math, func call, func call with params)
+			switch returnStmt.Argument.Expr.(type) {
+			case *ast.BinaryExpression:
+				binExpr := returnStmt.Argument.Expr.(*ast.BinaryExpression)
+				v.proxy[id][strLit.Value] = &mathType{
+					operator: binExpr.Operator,
+				}
+			case *ast.CallExpression:
+				callExpr := returnStmt.Argument.Expr.(*ast.CallExpression)
+				// check if the callExpr has params
+				if len(callExpr.ArgumentList) > 0 {
+					v.proxy[id][strLit.Value] = callWithParams
+				} else {
+					v.proxy[id][strLit.Value] = callWithoutParams
+				}
+			}
 		}
 	}
 }
 
 func (v *proxySimplifier) VisitExpression(n *ast.Expression) {
 	n.VisitChildrenWith(v)
-	memExpr, ok := n.Expr.(*ast.MemberExpression)
+	memExpr := &ast.MemberExpression{}
+	var ok bool
+	callExpr, ok := n.Expr.(*ast.CallExpression)
 	if !ok {
-		return
+		memExpr, ok = n.Expr.(*ast.MemberExpression)
+		if !ok {
+			return
+		}
+	} else {
+		memExpr, ok = callExpr.Callee.Expr.(*ast.MemberExpression)
+		if !ok {
+			return
+		}
 	}
+
 	obj, ok := memExpr.Object.Expr.(*ast.Identifier)
 	if !ok {
 		return
@@ -106,15 +156,40 @@ func (v *proxySimplifier) VisitExpression(n *ast.Expression) {
 		if val == nil {
 			return
 		}
-		strLit, ok := val.(string)
-		if !ok {
-			return
+		arguments := []ast.Expression{}
+		if callExpr != nil {
+			arguments = callExpr.ArgumentList
 		}
-
-		n.Expr = &ast.StringLiteral{Value: strLit}
+		switch val.(type) {
+		case string:
+			n.Expr = &ast.StringLiteral{Value: val.(string)}
+		case *mathType:
+			if callExpr == nil {
+				return
+			}
+			mathType := val.(*mathType)
+			n.Expr = &ast.BinaryExpression{
+				Operator: mathType.operator,
+				Left:     &arguments[0],
+				Right:    &arguments[1],
+			}
+		case int:
+			if callExpr == nil {
+				return
+			}
+			switch val.(int) {
+			case callWithParams:
+				n.Expr = &ast.CallExpression{
+					Callee:       &arguments[0],
+					ArgumentList: arguments[1:],
+				}
+			case callWithoutParams:
+				n.Expr = &ast.CallExpression{
+					Callee: &arguments[0],
+				}
+			}
+		}
 	}
-	//TODO do function unwrap too
-
 }
 
 func UnrollProxyFunctions(p *ast.Program) {
