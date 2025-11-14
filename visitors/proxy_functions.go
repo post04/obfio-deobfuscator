@@ -162,14 +162,14 @@ func (v *proxySimplifier) VisitExpression(n *ast.Expression) {
 		if callExpr != nil {
 			arguments = callExpr.ArgumentList
 		}
-		switch val.(type) {
+		switch v := val.(type) {
 		case string:
-			n.Expr = &ast.StringLiteral{Value: val.(string)}
+			n.Expr = &ast.StringLiteral{Value: v}
 		case *mathType:
 			if callExpr == nil {
 				return
 			}
-			mathType := val.(*mathType)
+			mathType := v
 			n.Expr = &ast.BinaryExpression{
 				Operator: mathType.operator,
 				Left:     &arguments[0],
